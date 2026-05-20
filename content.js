@@ -1950,6 +1950,15 @@
   const extractXhsPage = () => {
     const platform = "xiaohongshu";
     const url = location.href;
+    const parsedUrl = new URL(url);
+    const noteId =
+      parsedUrl.searchParams.get("xsec_token") ||
+      parsedUrl.pathname.match(/\/explore\/([^/?#]+)/)?.[1] ||
+      parsedUrl.pathname.match(/\/discovery\/item\/([^/?#]+)/)?.[1] ||
+      parsedUrl.pathname.match(/\/note\/([^/?#]+)/)?.[1] ||
+      "";
+    const hasNoteDetailDom = Boolean(document.querySelector("#detail-title, #detail-desc, .note-detail-main, .note-content"));
+    const isNotePage = Boolean(noteId && hasNoteDetailDom);
     const title = compact(titleFromXhs() || textFrom(["h1"]) || document.title, 180);
     const author = compact(
       textFrom([
@@ -1981,6 +1990,8 @@
       isSupported: true,
       isXiaohongshu: true,
       isDouyin: false,
+      pageType: isNotePage ? "note" : "non-note",
+      isNotePage,
       url,
       title,
       author,

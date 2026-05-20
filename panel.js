@@ -93,7 +93,17 @@ const platformConfig = (pageOrPlatform) => {
 };
 
 const isSupportedPage = (page) => page?.isSupported || page?.isXiaohongshu || page?.isDouyin;
-const isChatEnabledPage = (page) => Boolean(isSupportedPage(page) && platformConfig(page).chatEnabled);
+const isXhsNotePage = (page) => {
+  if (page?.platform !== "xiaohongshu" && !page?.isXiaohongshu) return false;
+  if (page?.isNotePage === true || page?.pageType === "note") return true;
+  try {
+    const parsed = new URL(page?.url || "");
+    return /\/(explore|note)\//.test(parsed.pathname) || /\/discovery\/item\//.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+};
+const isChatEnabledPage = (page) => Boolean(isSupportedPage(page) && platformConfig(page).chatEnabled && isXhsNotePage(page));
 
 const loadSettings = async () => {
   const stored = await storageGet(SETTINGS_STORAGE_KEY);
@@ -317,6 +327,17 @@ const renderPage = (page, options = {}) => {
     setStatus(`${platform.label}已识别`, "ok");
     elements.articleTitle.textContent = truncate(page.title || `${platform.label}${platform.contentName}`, 28);
     elements.pageSummary.textContent = `作者：${page.author || "未识别"}。媒体：${page.media?.type || "unknown"}。内容：${truncate(page.content || "未读取到内容，可能需要等待页面加载完成。", 130)}`;
+    renderSuggestions([]);
+    return;
+  }
+
+  if (!isXhsNotePage(page)) {
+    clearChat("当前小红书页面不是笔记详情页，AI 聊天只支持小红书笔记。请打开具体笔记后再使用。");
+    setChatControlsEnabled(false);
+    clearPendingScreenshot();
+    setStatus("小红书非笔记页", "warn");
+    elements.articleTitle.textContent = truncate(page.title || "小红书", 28);
+    elements.pageSummary.textContent = "当前识别为小红书页面，但不是笔记详情页。主页、个人页、创作中心、搜索页等暂不支持 AI 聊天。";
     renderSuggestions([]);
     return;
   }

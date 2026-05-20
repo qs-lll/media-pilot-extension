@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "Right Side Panel",
+  "version": "0.1.0",
+  "description": "Opens the extension in Chrome's native side panel.",
+  "action": {
+    "default_title": "Open side panel"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["sidePanel", "storage", "tabs", "scripting", "activeTab", "debugger"],
+  "host_permissions": [
+    "<all_urls>",
+    "https://www.xiaohongshu.com/*",
+    "https://*.xiaohongshu.com/*",
+    "https://douyin.com/*",
+    "https://www.douyin.com/*",
+    "https://*.douyin.com/*",
+    "https://iesdouyin.com/*",
+    "https://*.iesdouyin.com/*",
+    "https://new.aicontrol.top/*"
+  ],
+  "side_panel": {
+    "default_path": "panel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.xiaohongshu.com/*",
+        "https://*.xiaohongshu.com/*",
+        "https://douyin.com/*",
+        "https://www.douyin.com/*",
+        "https://*.douyin.com/*",
+        "https://iesdouyin.com/*",
+        "https://*.iesdouyin.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

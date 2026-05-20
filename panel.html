@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI 浏览助手</title>
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="app-header">
+        <!-- 固定区域：顶部 header 永久不动，不允许被页面切换或设置页替换。 -->
+        <div>
+          <p class="header-kicker">当前网页</p>
+          <h1 id="articleTitle">AI 浏览助手</h1>
+        </div>
+        <div class="header-actions">
+          <button class="header-button" id="manualRefreshButton" type="button">刷新</button>
+          <button class="clear-chat-button" id="clearChatButton" type="button">清空</button>
+          <span class="page-status" id="pageStatus">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span id="pageStatusText">等待识别</span>
+          </span>
+        </div>
+      </header>
+
+      <!-- 左侧 content 区域：右侧导航点击时只能替换这一块，不能改动 header 和 right-nav。 -->
+      <section class="chat-main" id="chatView" aria-label="AI 对话主界面">
+        <section class="summary-card" aria-label="页面概览">
+          <p id="pageSummary">
+            打开小红书笔记页面后，我会自动识别作者和正文，并把上下文带入 AI 对话。抖音页面仅启用评论 AI 回复。
+          </p>
+        </section>
+
+        <section class="platform-action-card" id="platformActionCard" aria-label="平台原生功能" hidden>
+          <button class="platform-action-button" id="platformAiButton" type="button">
+            <span>问AI</span>
+          </button>
+          <p id="platformActionHint">打开抖音页面里的原生问AI。</p>
+        </section>
+
+        <section class="chat-feed" id="chatFeed" aria-label="对话内容">
+          <article class="message assistant">
+            <div class="avatar">AI</div>
+            <div class="bubble">
+              <p id="assistantIntro">我会先识别当前页面，再准备适合 AI 对话的提问。</p>
+            </div>
+          </article>
+        </section>
+
+        <footer class="composer-dock">
+          <section class="suggestion-strip" id="suggestionStrip" aria-label="快捷提问">
+            <span class="suggestion-loading">识别文章后生成相关问题...</span>
+          </section>
+
+          <form class="composer" id="composer">
+            <label class="sr-only" for="promptInput">输入消息</label>
+            <div class="screenshot-preview" id="screenshotPreview" hidden>
+              <img id="screenshotPreviewImage" alt="待发送截图" />
+              <button id="removeScreenshotButton" type="button" aria-label="移除截图">×</button>
+            </div>
+            <textarea id="promptInput" rows="1" placeholder="基于当前小红书笔记提问..."></textarea>
+            <button class="tool-button" id="screenshotButton" type="button" aria-label="截图">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="19"
+                height="19"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"></path>
+                <circle cx="12" cy="13" r="3"></circle>
+              </svg>
+            </button>
+            <button class="send-button" type="submit" disabled aria-label="发送">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="19"
+                height="19"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"></path>
+                <path d="m21.854 2.147-10.94 10.939"></path>
+              </svg>
+            </button>
+          </form>
+        </footer>
+      </section>
+
+      <!-- 设置页必须展示在左侧 content 区域内，只能替换上面的 chatView。 -->
+      <section class="chat-main settings-main" id="settingsView" aria-label="设置页面" hidden>
+        <div class="settings-panel">
+          <div class="settings-heading">
+            <p class="header-kicker">插件设置</p>
+            <h2>AI 配置</h2>
+          </div>
+
+          <form class="settings-form" id="settingsForm">
+            <label class="settings-field" for="apiKeyInput">
+              <span>API Key</span>
+              <input
+                id="apiKeyInput"
+                type="password"
+                autocomplete="off"
+                placeholder="请填写从 new.aicontrol.top 获取的 API Key"
+              />
+              <small>请先在 https://new.aicontrol.top/ 注册并获取 API Key。</small>
+            </label>
+
+            <label class="settings-field" for="ownerReplyPromptInput">
+              <span>主人公视角评论回复提示词</span>
+              <textarea
+                id="ownerReplyPromptInput"
+                rows="7"
+                placeholder="例如：这是我自己发布的内容，请以作者本人视角回复评论..."
+              ></textarea>
+            </label>
+
+            <label class="settings-field" for="bystanderReplyPromptInput">
+              <span>路人视角评论回复提示词</span>
+              <textarea
+                id="bystanderReplyPromptInput"
+                rows="7"
+                placeholder="例如：这是其他人的内容，请以普通路人视角回复评论..."
+              ></textarea>
+            </label>
+
+            <div class="settings-actions">
+              <span class="settings-save-status" id="settingsSaveStatus" aria-live="polite"></span>
+              <button class="confirm-primary" type="submit">保存设置</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <aside class="right-nav" aria-label="功能导航">
+        <!-- 固定区域：右侧导航栏永久不动，任何内容页切换都不允许替换或改变它的位置。 -->
+        <nav class="nav-list">
+          <button class="nav-item active" id="chatNavButton" type="button" aria-current="page">
+            <span class="icon chat-icon" aria-hidden="true"></span>
+            <span>对话</span>
+          </button>
+          <button class="nav-item" type="button">
+            <span class="icon redbook-icon" aria-hidden="true"></span>
+            <span>小红书</span>
+          </button>
+          <button class="nav-item" type="button">
+            <span class="icon douyin-icon" aria-hidden="true"></span>
+            <span>抖音</span>
+          </button>
+        </nav>
+
+        <section class="mode-section" aria-labelledby="modeTitle">
+          <h3 id="modeTitle">当前模式</h3>
+          <div class="status-pill">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span id="modeValue">等待识别</span>
+          </div>
+        </section>
+
+        <section class="quick-card" aria-labelledby="quickTitle">
+          <h3 id="quickTitle">快捷动作</h3>
+          <button type="button" data-question="总结这篇笔记的核心观点和适合人群。">总结页面</button>
+          <button type="button" data-question="提取评论里的用户痛点和高频问题。">提取评论</button>
+          <button type="button" data-question="把这篇内容整理成素材卡片。">保存素材</button>
+        </section>
+
+        <button class="settings-nav-button" id="settingsNavButton" type="button" aria-label="打开设置页面" title="设置">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="21"
+            height="21"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path>
+            <circle cx="12" cy="12" r="3"></circle>
+          </svg>
+        </button>
+      </aside>
+    </main>
+    <div class="confirm-overlay" id="refreshConfirm" hidden>
+      <div class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="refreshConfirmTitle">
+        <h2 id="refreshConfirmTitle">刷新当前页面内容？</h2>
+        <p id="refreshConfirmText">检测到页面内容变化，是否重新读取当前页面并清空当前聊天记录？</p>
+        <div class="confirm-actions">
+          <button class="confirm-secondary" id="refreshCancelButton" type="button">取消</button>
+          <button class="confirm-primary" id="refreshConfirmButton" type="button">确认刷新</button>
+        </div>
+      </div>
+    </div>
+    <script src="panel.js"></script>
+  </body>
+</html>

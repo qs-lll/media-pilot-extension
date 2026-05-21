@@ -37,6 +37,11 @@ const state = {
   suggestionPromise: null,
   coverInsightSignature: "",
   coverInsightPromise: null,
+  backgroundVideo: {
+    signature: "",
+    running: false,
+    completed: []
+  },
   confirmDialog: null,
   pendingScreenshot: null,
   settings: {
@@ -59,6 +64,8 @@ const elements = {
   clearChatButton: $("#clearChatButton"),
   promptInput: $("#promptInput"),
   composer: $("#composer"),
+  videoFileInput: $("#videoFileInput"),
+  videoAnalyzeButton: $("#videoAnalyzeButton"),
   screenshotButton: $("#screenshotButton"),
   screenshotPreview: $("#screenshotPreview"),
   screenshotPreviewImage: $("#screenshotPreviewImage"),
@@ -87,6 +94,22 @@ const elements = {
 const storageGet = (keys) => new Promise((resolve) => chrome.storage.sync.get(keys, resolve));
 const storageSet = (items) => new Promise((resolve) => chrome.storage.sync.set(items, resolve));
 
+const cleanApiKey = (value) => String(value || "")
+  .replace(/[\u200B-\u200D\uFEFF]/g, "")
+  .trim()
+  .replace(/^Bearer\s+/i, "")
+  .replace(/^["'“”‘’]+|["'“”‘’]+$/g, "")
+  .trim();
+
+const getValidApiKey = (value) => {
+  const apiKey = cleanApiKey(value);
+  if (!apiKey) return "";
+  if (!/^[\x21-\x7E]+$/.test(apiKey)) {
+    throw new Error("API Key 含有非法字符，请只粘贴密钥本身，不要包含中文说明、空格或特殊符号。");
+  }
+  return apiKey;
+};
+
 const platformConfig = (pageOrPlatform) => {
   const platform = typeof pageOrPlatform === "string" ? pageOrPlatform : pageOrPlatform?.platform;
   return PLATFORM_CONFIG[platform] || PLATFORM_CONFIG.unknown;
@@ -109,7 +132,7 @@ const loadSettings = async () => {
   const stored = await storageGet(SETTINGS_STORAGE_KEY);
   const settings = stored[SETTINGS_STORAGE_KEY] || {};
   state.settings = {
-    apiKey: settings.apiKey || "",
+    apiKey: cleanApiKey(settings.apiKey),
     ownerReplyPrompt: settings.ownerReplyPrompt || settings.commentReplyPrompt || DEFAULT_OWNER_REPLY_PROMPT,
     bystanderReplyPrompt: settings.bystanderReplyPrompt || settings.commentReplyPrompt || DEFAULT_BYSTANDER_REPLY_PROMPT
   };
@@ -120,12 +143,14 @@ const loadSettings = async () => {
 };
 
 const saveSettings = async () => {
+  const apiKey = getValidApiKey(elements.apiKeyInput.value);
   state.settings = {
-    apiKey: elements.apiKeyInput.value.trim(),
+    apiKey,
     ownerReplyPrompt: elements.ownerReplyPromptInput.value.trim() || DEFAULT_OWNER_REPLY_PROMPT,
     bystanderReplyPrompt: elements.bystanderReplyPromptInput.value.trim() || DEFAULT_BYSTANDER_REPLY_PROMPT
   };
   API_CONFIG.key = state.settings.apiKey;
+  elements.apiKeyInput.value = state.settings.apiKey;
   elements.ownerReplyPromptInput.value = state.settings.ownerReplyPrompt;
   elements.bystanderReplyPromptInput.value = state.settings.bystanderReplyPrompt;
   await storageSet({ [SETTINGS_STORAGE_KEY]: state.settings });
@@ -269,6 +294,7 @@ const getPageSignature = (page) => {
 const setChatControlsEnabled = (enabled) => {
   elements.promptInput.disabled = !enabled;
   elements.screenshotButton.disabled = !enabled;
+  elements.videoAnalyzeButton.disabled = false;
   elements.composer.querySelector(".send-button").disabled = !enabled || (!elements.promptInput.value.trim() && !state.pendingScreenshot);
   elements.composer.dataset.disabled = enabled ? "false" : "true";
 };
@@ -307,6 +333,11 @@ const renderPage = (page, options = {}) => {
     state.suggestionPromise = null;
     state.coverInsightSignature = "";
     state.coverInsightPromise = null;
+    state.backgroundVideo = {
+      signature: nextSignature,
+      running: false,
+      completed: []
+    };
   }
 
   if (!isSupportedPage(page)) {
@@ -347,6 +378,7 @@ const renderPage = (page, options = {}) => {
   setStatus(`${platform.label}已识别`, "ok");
   elements.articleTitle.textContent = truncate(page.title || `${platform.label}${platform.contentName}`, 28);
   elements.pageSummary.textContent = `作者：${page.author || "未识别"}。媒体：${page.media?.type || "unknown"}。正文：${truncate(page.content || "未读取到正文，可能需要等待页面加载完成。", 130)}`;
+  startBackgroundVideoAnalysis(page);
   generateCoverInsight(page).finally(() => generateSuggestions(state.page || page));
 };
 
@@ -490,6 +522,7 @@ const setComposerBusy = (busy) => {
   const canUseComposer = isChatEnabledPage(state.page);
   elements.promptInput.disabled = busy || !canUseComposer;
   elements.screenshotButton.disabled = busy || !canUseComposer;
+  elements.videoAnalyzeButton.disabled = busy;
   syncComposerState();
 };
 
@@ -524,7 +557,8 @@ const parseChatResponse = async (response) => {
 };
 
 const callChat = async (messages) => {
-  if (!API_CONFIG.key) {
+  const apiKey = getValidApiKey(API_CONFIG.key);
+  if (!apiKey) {
     showView("settings");
     throw new Error("请先在设置中填写 API Key。");
   }
@@ -533,7 +567,7 @@ const callChat = async (messages) => {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${API_CONFIG.key}`
+      Authorization: `Bearer ${apiKey}`
     },
     body: JSON.stringify({
       model: API_CONFIG.model,
@@ -543,6 +577,37 @@ const callChat = async (messages) => {
   });
 
   return parseChatResponse(response);
+};
+
+const callAudioTranscription = async (file) => {
+  const apiKey = getValidApiKey(API_CONFIG.key);
+  if (!apiKey) {
+    showView("settings");
+    throw new Error("请先在设置中填写 API Key。");
+  }
+
+  const form = new FormData();
+  form.append("model", "whisper-1");
+  form.append("file", file, file.name || "video.mp4");
+  form.append("response_format", "json");
+
+  const response = await fetch(`${API_CONFIG.url.replace(/\/$/, "")}/v1/audio/transcriptions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: form
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(text || `音频转写失败：${response.status}`);
+  }
+  try {
+    const data = JSON.parse(text);
+    return String(data.text || data.content || "").trim();
+  } catch {
+    return text.trim();
+  }
 };
 
 const buildUserMessage = (text, screenshot) => {
@@ -560,6 +625,371 @@ const buildUserMessage = (text, screenshot) => {
       }))
     ]
   };
+};
+
+const chunkList = (items, size) => {
+  const chunks = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+};
+
+const runConcurrent = async (items, concurrency, worker) => {
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(Math.max(1, concurrency), items.length) }, async () => {
+    const results = [];
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results.push(await worker(items[index], index));
+    }
+    return results;
+  });
+  return (await Promise.all(workers)).flat();
+};
+
+const summarizeFrameBatch = async (frames, batchIndex) => {
+  const labels = frames.map((frame) => `${frame.timeSec.toFixed(1)}s`).join(",");
+  const prompt = `只看图，极简中文输出。时间=${labels}。格式：场景/人物/动作/文字/可用卖点。每图1行，每行<=35字。`;
+  return callChat([
+    { role: "system", content: "视频帧识别。只写看见的，不推理，不解释。" },
+    buildUserMessage(prompt, frames)
+  ]).then((summary) => `批次${batchIndex + 1} ${labels}\n${summary}`);
+};
+
+const summarizeFramesFast = async (frames, options = {}) => {
+  const batchSize = options.batchSize || 2;
+  const concurrency = options.concurrency || 6;
+  const batches = chunkList(frames, batchSize);
+  const settled = await runConcurrent(batches, concurrency, (batch, index) => {
+    return summarizeFrameBatch(batch, index)
+      .then((value) => ({ status: "fulfilled", value }))
+      .catch((reason) => ({ status: "rejected", reason }));
+  });
+  return settled
+    .map((result, index) => {
+      if (result.status === "fulfilled") return result.value;
+      const labels = batches[index].map((frame) => `${frame.timeSec.toFixed(1)}s`).join(",");
+      return `批次${index + 1} ${labels}\n识别失败：${result.reason?.message || "未知错误"}`;
+    })
+    .join("\n\n");
+};
+
+const seekVideo = (video, timeSec, timeoutMs = 4500) => {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      window.clearTimeout(timer);
+      video.removeEventListener("seeked", onSeeked);
+      video.removeEventListener("error", onError);
+    };
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      callback(value);
+    };
+    const onSeeked = () => finish(resolve);
+    const onError = () => finish(reject, new Error("视频跳转失败"));
+    const timer = window.setTimeout(() => finish(reject, new Error("视频抽帧超时")), timeoutMs);
+    video.addEventListener("seeked", onSeeked, { once: true });
+    video.addEventListener("error", onError, { once: true });
+    video.currentTime = timeSec;
+  });
+};
+
+const loadVideoMetadata = (video, url) => {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      video.removeEventListener("loadedmetadata", onLoaded);
+      video.removeEventListener("error", onError);
+    };
+    const onLoaded = () => {
+      cleanup();
+      resolve({
+        durationSec: Number.isFinite(video.duration) ? video.duration : 0,
+        width: video.videoWidth || 0,
+        height: video.videoHeight || 0
+      });
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error("无法读取视频文件，请确认是浏览器可播放的 MP4/WebM/MOV。"));
+    };
+    video.addEventListener("loadedmetadata", onLoaded, { once: true });
+    video.addEventListener("error", onError, { once: true });
+    video.preload = "metadata";
+    video.muted = true;
+    video.playsInline = true;
+    video.src = url;
+    video.load();
+  });
+};
+
+const canvasDataUrl = (canvas, preferredType = "image/webp", quality = 0.82) => {
+  const dataUrl = canvas.toDataURL(preferredType, quality);
+  if (dataUrl.startsWith(`data:${preferredType}`)) return dataUrl;
+  return canvas.toDataURL("image/jpeg", quality);
+};
+
+const extractVideoFrames = async (file, options = {}) => {
+  const maxFrames = options.maxFrames || 10;
+  const maxLongEdge = options.maxLongEdge || 768;
+  const concurrency = Math.max(1, Math.min(options.concurrency || 3, 4));
+  const url = URL.createObjectURL(file);
+  const video = document.createElement("video");
+
+  try {
+    const metadata = await loadVideoMetadata(video, url);
+    if (!metadata.durationSec || !metadata.width || !metadata.height) {
+      throw new Error("视频元信息不完整，无法抽帧。");
+    }
+
+    const scale = Math.min(1, maxLongEdge / Math.max(metadata.width, metadata.height));
+    const frameWidth = Math.max(1, Math.round(metadata.width * scale));
+    const frameHeight = Math.max(1, Math.round(metadata.height * scale));
+
+    const totalFrames = Math.max(1, Math.min(maxFrames, Math.ceil(metadata.durationSec)));
+    const intervalSec = metadata.durationSec / totalFrames;
+    const jobs = Array.from({ length: totalFrames }, (_, index) => ({
+      index,
+      timeSec: Math.min(Math.max(0, metadata.durationSec - 0.05), index * intervalSec)
+    }));
+
+    const runFrameJob = async (job) => {
+      const frameUrl = URL.createObjectURL(file);
+      const frameVideo = document.createElement("video");
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d", { alpha: false });
+      if (!context) throw new Error("当前浏览器不支持 canvas 抽帧。");
+      canvas.width = frameWidth;
+      canvas.height = frameHeight;
+      try {
+        await loadVideoMetadata(frameVideo, frameUrl);
+        await seekVideo(frameVideo, job.timeSec);
+        context.drawImage(frameVideo, 0, 0, canvas.width, canvas.height);
+        return {
+          type: "image",
+          dataUrl: canvasDataUrl(canvas),
+          label: `视频帧 ${job.index + 1} / ${totalFrames}，${job.timeSec.toFixed(2)}s`,
+          timeSec: job.timeSec,
+          index: job.index
+        };
+      } finally {
+        frameVideo.removeAttribute("src");
+        frameVideo.load();
+        URL.revokeObjectURL(frameUrl);
+      }
+    };
+
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(concurrency, jobs.length) }, async () => {
+      const results = [];
+      while (cursor < jobs.length) {
+        const job = jobs[cursor];
+        cursor += 1;
+        try {
+          results.push(await runFrameJob(job));
+        } catch {
+          // Skip individual bad frames and keep the rest of the analysis usable.
+        }
+      }
+      return results;
+    });
+    const frames = (await Promise.all(workers))
+      .flat()
+      .sort((a, b) => a.index - b.index)
+      .map(({ index, ...frame }) => frame);
+
+    if (!frames.length) throw new Error("没有成功抽取到视频画面。");
+    return {
+      metadata: {
+        source: "local_file",
+        fileName: file.name,
+        fileSize: file.size,
+        durationSec: metadata.durationSec,
+        width: metadata.width,
+        height: metadata.height,
+        frameExtraction: {
+          mode: "uniform",
+          maxFrames: totalFrames,
+          extractedFrames: frames.length,
+          intervalSec,
+          format: frames[0]?.dataUrl?.startsWith("data:image/webp") ? "image/webp" : "image/jpeg",
+          maxLongEdge,
+          quality: 0.82,
+          concurrency
+        },
+        audioExtraction: {
+          enabled: true,
+          method: "server_transcription",
+          endpoint: "/v1/audio/transcriptions"
+        }
+      },
+      frames
+    };
+  } finally {
+    video.removeAttribute("src");
+    video.load();
+    URL.revokeObjectURL(url);
+  }
+};
+
+// 本地视频抽帧分析功能已完成并冻结：除非明确重开该需求，不要改动 analyzeLocalVideo 及其直接抽帧/并发识别流程。
+const analyzeLocalVideo = async (file) => {
+  if (!file) return;
+  if (!file.type.startsWith("video/")) {
+    appendMessage("assistant", "请选择 MP4、MOV、WebM 等视频文件。");
+    return;
+  }
+  if (file.size > 200 * 1024 * 1024) {
+    appendMessage("assistant", "视频超过 200MB，建议先剪成 5 分钟以内再分析。");
+    return;
+  }
+
+  appendMessage("user", `分析本地视频：${file.name}`);
+  const pending = appendMessage("assistant", "正在并发抽取画面，并识别视频声音...", true);
+  setComposerBusy(true);
+
+  try {
+    const frameTask = extractVideoFrames(file, { maxFrames: 12, maxLongEdge: 640, concurrency: 3 });
+    const transcriptTask = callAudioTranscription(file).catch((error) => `音频转写失败：${error.message}`);
+    const [{ metadata, frames }, transcript] = await Promise.all([frameTask, transcriptTask]);
+    pending.classList.remove("pending");
+    pending.dataset.rawText = "视频抽帧完成，正在提交 AI 分析...";
+    const hasTranscript = transcript && !transcript.startsWith("音频转写失败：");
+    setMessageContent(
+      pending.querySelector("p"),
+      `已并发抽取 ${frames.length} 张画面，视频 ${metadata.durationSec.toFixed(1)} 秒，${metadata.width}×${metadata.height}。${hasTranscript ? "已识别声音，" : "声音识别未完成，"}正在提交 AI 分析...`
+    );
+    const frameSummary = await summarizeFramesFast(frames, { batchSize: 2, concurrency: 6 });
+    setMessageContent(pending.querySelector("p"), "画面并发识别完成，正在整合视频结论...");
+
+    const prompt = `基于视频帧摘要和音频转写，输出：1总结 2时间线 3口播要点 4标题/卖点/脚本建议。别废话。\n\n元信息：${JSON.stringify(metadata)}\n\n帧摘要：\n${frameSummary}\n\n音频：\n${transcript || "无"}`;
+    const answer = await callChat([
+      {
+        role: "system",
+        content:
+          "自媒体视频分析助手。基于帧摘要和音频转写，简洁输出可执行结论。"
+      },
+      { role: "user", content: prompt }
+    ]);
+
+    pending.dataset.rawText = answer;
+    setMessageContent(pending.querySelector("p"), answer);
+    addMessageActions(pending);
+    state.messages.push({ role: "user", content: `分析本地视频：${file.name}` }, { role: "assistant", content: answer });
+  } catch (error) {
+    pending.classList.remove("pending");
+    const errorText = `视频分析失败：${error.message}`;
+    pending.dataset.rawText = errorText;
+    setMessageContent(pending.querySelector("p"), errorText);
+    addMessageActions(pending);
+  } finally {
+    setComposerBusy(false);
+    elements.videoFileInput.value = "";
+  }
+};
+
+const extractVideoFramesFromUrl = async (videoUrl, options = {}) => {
+  const maxFrames = options.maxFrames || 8;
+  const maxLongEdge = options.maxLongEdge || 512;
+  const video = document.createElement("video");
+  video.crossOrigin = "anonymous";
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d", { alpha: false });
+  if (!context) throw new Error("当前浏览器不支持 canvas 抽帧。");
+
+  try {
+    const metadata = await loadVideoMetadata(video, videoUrl);
+    if (!metadata.durationSec || !metadata.width || !metadata.height) {
+      throw new Error("视频元信息不完整，无法抽帧。");
+    }
+    const scale = Math.min(1, maxLongEdge / Math.max(metadata.width, metadata.height));
+    canvas.width = Math.max(1, Math.round(metadata.width * scale));
+    canvas.height = Math.max(1, Math.round(metadata.height * scale));
+    const totalFrames = Math.max(1, Math.min(maxFrames, Math.ceil(metadata.durationSec)));
+    const intervalSec = metadata.durationSec / totalFrames;
+    const frames = [];
+    for (let index = 0; index < totalFrames; index += 1) {
+      const timeSec = Math.min(Math.max(0, metadata.durationSec - 0.05), index * intervalSec);
+      try {
+        await seekVideo(video, timeSec);
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        frames.push({
+          type: "image",
+          dataUrl: canvasDataUrl(canvas, "image/jpeg", 0.72),
+          label: `网页视频帧 ${index + 1} / ${totalFrames}，${timeSec.toFixed(2)}s`,
+          timeSec
+        });
+      } catch {
+        // Keep partial background analysis available.
+      }
+    }
+    if (!frames.length) throw new Error("没有成功抽取到视频画面。");
+    return {
+      metadata: {
+        source: "xiaohongshu_page_video",
+        videoUrl,
+        durationSec: metadata.durationSec,
+        width: metadata.width,
+        height: metadata.height,
+        frameExtraction: {
+          mode: "uniform",
+          maxFrames: totalFrames,
+          extractedFrames: frames.length,
+          intervalSec,
+          format: "image/jpeg",
+          maxLongEdge,
+          quality: 0.72
+        }
+      },
+      frames
+    };
+  } finally {
+    video.removeAttribute("src");
+    video.load();
+  }
+};
+
+const startBackgroundVideoAnalysis = (page) => {
+  // 小红书视频链接识别、后台抽帧与解析功能已验收冻结：除非明确重开该需求，不要改动这条链路。
+  if (!isChatEnabledPage(page)) return;
+  const videos = (page?.media?.videos || []).filter((url) => /^https?:\/\//i.test(url) && !/\.m3u8(\?|$)/i.test(url)).slice(0, 3);
+  if (!videos.length) return;
+
+  const signature = `${getPageSignature(page)}|${videos.join("|")}`;
+  if (state.backgroundVideo.signature === signature && (state.backgroundVideo.running || state.backgroundVideo.completed.length)) return;
+  state.backgroundVideo = {
+    signature,
+    running: true,
+    completed: []
+  };
+
+  runConcurrent(videos, 3, async (videoUrl, index) => {
+    try {
+      const { metadata, frames } = await extractVideoFramesFromUrl(videoUrl, { maxFrames: 8, maxLongEdge: 512 });
+      const frameSummary = await summarizeFramesFast(frames, { batchSize: 2, concurrency: 4 });
+      if (state.backgroundVideo.signature !== signature) return null;
+      const summary = `小红书视频${index + 1}：${metadata.durationSec.toFixed(1)}秒，${metadata.width}x${metadata.height}\n${frameSummary}`;
+      state.backgroundVideo.completed.push(summary);
+      return summary;
+    } catch (error) {
+      if (state.backgroundVideo.signature !== signature) return null;
+      state.backgroundVideo.completed.push(`小红书视频${index + 1}：后台解析失败：${error.message}`);
+      return null;
+    }
+  }).finally(() => {
+    if (state.backgroundVideo.signature === signature) {
+      state.backgroundVideo.running = false;
+    }
+  });
+};
+
+const currentBackgroundVideoPrompt = () => {
+  if (!state.backgroundVideo.completed.length) return "";
+  return `\n\n当前小红书视频后台解析（只包含已完成部分，后台仍可继续运行）：\n${state.backgroundVideo.completed.join("\n\n")}`;
 };
 
 const shouldAttachArticleImages = (text) => {
@@ -653,8 +1083,9 @@ const callAi = async (userText, screenshot = null) => {
   const imageHint = autoImages.length
     ? `\n\n插件已自动把当前文章图片作为视觉输入附加到本次消息中，共 ${autoImages.length} 张。回答图片内容时必须基于这些视觉输入，不要说“只能看到链接”。`
     : "";
+  const videoHint = currentBackgroundVideoPrompt();
   return callChat([
-    { role: "system", content: `${buildHiddenSystemPrompt(state.page)}${imageHint}` },
+    { role: "system", content: `${buildHiddenSystemPrompt(state.page)}${imageHint}${videoHint}` },
     ...state.messages,
     buildUserMessage(userText, images)
   ]);
@@ -897,6 +1328,15 @@ elements.screenshotButton.addEventListener("click", async () => {
   }
 });
 
+elements.videoAnalyzeButton.addEventListener("click", () => {
+  elements.videoFileInput.click();
+});
+
+elements.videoFileInput.addEventListener("change", () => {
+  const file = elements.videoFileInput.files?.[0];
+  analyzeLocalVideo(file);
+});
+
 elements.removeScreenshotButton.addEventListener("click", () => {
   clearPendingScreenshot();
   syncComposerState();
@@ -958,13 +1398,17 @@ elements.settingsNavButton.addEventListener("click", () => {
 
 elements.settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  await saveSettings();
-  elements.settingsSaveStatus.textContent = "已保存";
   window.clearTimeout(elements.settingsSaveStatus.dataset.timer);
-  const timer = window.setTimeout(() => {
-    elements.settingsSaveStatus.textContent = "";
-  }, 1800);
-  elements.settingsSaveStatus.dataset.timer = String(timer);
+  try {
+    await saveSettings();
+    elements.settingsSaveStatus.textContent = "已保存";
+    const timer = window.setTimeout(() => {
+      elements.settingsSaveStatus.textContent = "";
+    }, 1800);
+    elements.settingsSaveStatus.dataset.timer = String(timer);
+  } catch (error) {
+    elements.settingsSaveStatus.textContent = error.message || "保存失败";
+  }
 });
 
 chrome.runtime.onMessage.addListener((message) => {

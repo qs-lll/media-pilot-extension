@@ -1909,7 +1909,7 @@
       generateCommentReply(button, input);
     };
     if (button.dataset.mediaAiPointerGuard !== "true") {
-      ["pointerdown", "mousedown", "mouseup", "pointerup"].forEach((type) => {
+      ["pointerdown", "mousedown"].forEach((type) => {
         button.addEventListener(type, stopAiButtonEvent, { capture: true });
       });
       button.dataset.mediaAiPointerGuard = "true";

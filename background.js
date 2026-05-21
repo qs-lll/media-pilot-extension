@@ -6,6 +6,22 @@ const API_CONFIG = {
 };
 const SETTINGS_STORAGE_KEY = "aiAssistantSettings";
 
+const cleanApiKey = (value) => String(value || "")
+  .replace(/[\u200B-\u200D\uFEFF]/g, "")
+  .trim()
+  .replace(/^Bearer\s+/i, "")
+  .replace(/^["'“”‘’]+|["'“”‘’]+$/g, "")
+  .trim();
+
+const getValidApiKey = (value) => {
+  const apiKey = cleanApiKey(value);
+  if (!apiKey) return "";
+  if (!/^[\x21-\x7E]+$/.test(apiKey)) {
+    throw new Error("API Key 含有非法字符，请只粘贴密钥本身，不要包含中文说明、空格或特殊符号。");
+  }
+  return apiKey;
+};
+
 chrome.action.onClicked.addListener(async (tab) => {
   await chrome.sidePanel.open({ windowId: tab.windowId });
 });
@@ -44,7 +60,7 @@ const parseChatResponse = async (response) => {
 
 const callChat = async (messages) => {
   const stored = await chrome.storage.sync.get(SETTINGS_STORAGE_KEY);
-  const apiKey = stored[SETTINGS_STORAGE_KEY]?.apiKey || DEFAULT_API_KEY;
+  const apiKey = getValidApiKey(stored[SETTINGS_STORAGE_KEY]?.apiKey || DEFAULT_API_KEY);
   if (!apiKey) {
     throw new Error("请先在插件设置中填写 API Key。");
   }
